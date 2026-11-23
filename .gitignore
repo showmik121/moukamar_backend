@@ -1,12 +1,38 @@
-.venv/
-venv/
-env/
-ENV/
+# Python bytecode & cache
 __pycache__/
 *.py[cod]
 *$py.class
+*.so
+
+# Virtual Environments
+.venv/
+venv/
+ENV/
+env/
+env.bak/
+venv.bak/
+
+# Local database
 *.sqlite3
+db.sqlite3-journal
+
+# Environment and sensitive settings
+.env
+.env.local
+*.env
+local_settings.py
+
+# Logs
 *.log
+logs/
+
+# Django static and media
+media/
+staticfiles/
+
+# Editor and OS
 .DS_Store
-.idea/
+Thumbs.db
 .vscode/
+.idea/
+*.swp
