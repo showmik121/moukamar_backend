@@ -1,12 +1,9 @@
 from rest_framework import generics
-from rest_framework.views import APIView
 from rest_framework.response import Response
-from django.contrib.auth import get_user_model
+from rest_framework.views import APIView
+
 from .models import Notification, SprayAlert
 from .serializers import NotificationSerializer, SprayAlertSerializer
-from apps.farms.models import Farm
-
-User = get_user_model()
 
 
 class NotificationList(generics.ListAPIView):
@@ -18,28 +15,32 @@ class NotificationList(generics.ListAPIView):
 
 class MarkAllRead(APIView):
     def post(self, request):
-        Notification.objects.filter(recipient=request.user, unread=True).update(unread=False)
-        return Response({'detail': 'সব সতর্কতা পড়া হয়েছে'})
+        updated = Notification.objects.filter(recipient=request.user, unread=True).update(unread=False)
+        return Response({'detail': 'সব সতর্কতা পড়া হয়েছে', 'count': updated})
 
 
-class SprayAlertCreate(APIView):
-    def post(self, request):
-        ser = SprayAlertSerializer(data=request.data)
-        if ser.is_valid():
-            alert = ser.save(cropper=request.user)
-            # ওই উপজেলার সব খামারিকে নোটিফিকেশন দাও
-            farmers_in_area = User.objects.filter(
-                role='farmer', upazila=alert.upazila, district=alert.district
-            )
-            notifications = [
-                Notification(
-                    recipient=farmer,
-                    kind='spray',
-                    title=f'কীটনাশক স্প্রে — {alert.upazila}',
-                    body=f'{alert.spray_date} তারিখে {alert.crop} খেতে স্প্রে হবে (কৃষক: {request.user.name})। বাক্স ঢেকে রাখুন।'
-                )
-                for farmer in farmers_in_area
-            ]
-            Notification.objects.bulk_create(notifications)
-            return Response(SprayAlertSerializer(alert).data, status=201)
-        return Response(ser.errors, status=400)
+class SprayAlertListCreate(generics.ListCreateAPIView):
+    """কৃষক স্প্রের আগে নোটিশ দিলে ওই উপজেলার খামারিরা জানতে পারেন।"""
+
+    serializer_class = SprayAlertSerializer
+
+    def get_queryset(self):
+        qs = SprayAlert.objects.select_related('upazila__district', 'crop', 'cropper')
+        user = self.request.user
+        # খামারি নিজের উপজেলার নোটিশ দেখেন, কৃষক নিজের দেওয়া নোটিশ
+        if user.role == 'farmer' and user.upazila_id:
+            return qs.filter(upazila_id=user.upazila_id)
+        if user.role == 'cropper':
+            return qs.filter(cropper=user)
+        return qs
+
+    def perform_create(self, serializer):
+        """শুধু নোটিশটা সেভ করে — সতর্কতা তৈরির কাজ Python-এ নেই।
+
+        `sql/08_triggers.sql`-এর `trg_spray_alert_fanout` trigger
+        spray_alerts-এ সারি ঢোকার সাথে সাথে ওই উপজেলার সব খামারির জন্য
+        notifications বানিয়ে দেয়। আগে এই লুপটা এখানে Python-এ ছিল;
+        ডাটাবেজে নেওয়ায় সরাসরি SQL দিয়ে নোটিশ ঢোকালেও খামারিরা জানতে
+        পারেন, আর নিয়মটা দুই জায়গায় লেখা থাকে না।
+        """
+        serializer.save(cropper=self.request.user)

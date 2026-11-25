@@ -1,18 +1,25 @@
-from rest_framework import generics, status
-from rest_framework.views import APIView
+from django.db import transaction
+from rest_framework import generics
 from rest_framework.response import Response
-from .models import Post, Comment
-from .serializers import PostSerializer, CommentSerializer
+from rest_framework.views import APIView
+
+from .models import Post, PostVote
+from .serializers import CommentSerializer, PostSerializer
 
 
 class PostListCreate(generics.ListCreateAPIView):
     serializer_class = PostSerializer
 
     def get_queryset(self):
-        qs = Post.objects.prefetch_related('comments__author').select_related('author')
-        cat = self.request.query_params.get('category')
-        if cat:
-            qs = qs.filter(category=cat)
+        qs = (Post.objects
+              .select_related('author__upazila')
+              .prefetch_related('tags', 'comments__author'))
+        category = self.request.query_params.get('category')
+        tag = self.request.query_params.get('tag')
+        if category:
+            qs = qs.filter(category=category)
+        if tag:
+            qs = qs.filter(tags__name=tag)
         return qs
 
     def perform_create(self, serializer):
@@ -20,14 +27,27 @@ class PostListCreate(generics.ListCreateAPIView):
 
 
 class PostUpvote(APIView):
+    """upvote দেওয়া।
+
+    দুটো নিয়ম ডাটাবেজে বসানো, Python-এ নয়:
+      • একজন একবারই দিতে পারে — post_votes-এর UNIQUE constraint
+      • posts.upvote_count গণনা — trg_post_vote_after_insert trigger
+    তাই এখানে শুধু একটা ভোটের সারি বসানো হয়; গণনা আপনা থেকে ঠিক থাকে।
+    """
+
+    @transaction.atomic
     def post(self, request, pk):
-        try:
-            post = Post.objects.get(pk=pk)
-        except Post.DoesNotExist:
+        post = Post.objects.filter(pk=pk).first()
+        if not post:
             return Response({'detail': 'পোস্ট পাওয়া যায়নি'}, status=404)
-        post.upvotes += 1
-        post.save()
-        return Response({'upvotes': post.upvotes})
+
+        _, created = PostVote.objects.get_or_create(post=post, user=request.user)
+        if not created:
+            return Response({'detail': 'আপনি আগেই upvote দিয়েছেন',
+                             'upvotes': post.upvote_count}, status=409)
+
+        post.refresh_from_db(fields=['upvote_count'])
+        return Response({'upvotes': post.upvote_count})
 
 
 class CommentCreate(generics.CreateAPIView):
