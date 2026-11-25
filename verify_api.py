@@ -22,6 +22,7 @@ from django.test import Client  # noqa: E402
 from apps.accounts.models import User  # noqa: E402
 from apps.alerts.models import Notification, SprayAlert  # noqa: E402
 from apps.farms.models import Farm  # noqa: E402
+from apps.farms.models import Inspection as InspectionModel  # noqa: E402
 from apps.trust.models import AuditLog  # noqa: E402
 
 PASS, FAIL = [], []
@@ -111,7 +112,16 @@ check('রানী queens টেবিল থেকে', by_code.get('MK-001', 
       str(by_code.get('MK-001', {}).get('queen')))
 check('রানীহীন বাক্সে queen="নেই"', by_code.get('MK-009', {}).get('queen') == 'নেই',
       str(by_code.get('MK-009', {}).get('queen')))
-check('শেষ পরিদর্শনের দিন তারিখ থেকে গোনা', by_code.get('MK-003', {}).get('last') == 16,
+# সংখ্যাটা হাতে বসানো যায় না — seed তারিখ ধরে সারি বানায়, তাই একদিন
+# পরে ব্যবধান এক বেড়ে যায়। ডাটাবেজ থেকেই হিসেব করে নেওয়া হয়।
+from datetime import date as _date  # noqa: E402
+
+_latest = (InspectionModel.objects.filter(hive__code='MK-003')
+           .order_by('-inspect_date').first())
+MK003_DAYS = (_date.today() - _latest.inspect_date).days if _latest else None
+
+check('শেষ পরিদর্শনের দিন তারিখ থেকে গোনা',
+      by_code.get('MK-003', {}).get('last') == MK003_DAYS,
       str(by_code.get('MK-003', {}).get('last')))
 
 r = c.get('/api/farms/')
@@ -135,7 +145,8 @@ check('GET /api/hives/status/ (v_hive_status)',
       r.status_code == 200 and len(status_rows) == 5, f'count={len(status_rows)}')
 check('ভিউ রানী ঠিক বলছে', by_status.get('MK-009', {}).get('queen') == 'নেই',
       str(by_status.get('MK-009', {}).get('queen')))
-check('ভিউ শেষ পরিদর্শনের দিন ঠিক গুনছে', by_status.get('MK-003', {}).get('last') == 16,
+check('ভিউ শেষ পরিদর্শনের দিন ঠিক গুনছে',
+      by_status.get('MK-003', {}).get('last') == MK003_DAYS,
       str(by_status.get('MK-003', {}).get('last')))
 check('ভিউ বাকি পরিদর্শন চিহ্নিত করছে', by_status.get('MK-003', {}).get('overdue') is True,
       str(by_status.get('MK-003', {}).get('overdue')))
@@ -238,7 +249,6 @@ from django.utils import timezone as dj_timezone  # noqa: E402
 
 from apps.farms.models import Harvest as HarvestModel  # noqa: E402
 from apps.farms.models import HiveEvent as HiveEventModel  # noqa: E402
-from apps.farms.models import Inspection as InspectionModel  # noqa: E402
 
 # procedure গুলো hive_events-এ ঘটনা লেখে — শেষে এর পরের সারিগুলো মোছা হয়
 proc_started_at = dj_timezone.now()
