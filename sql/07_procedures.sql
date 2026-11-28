@@ -238,10 +238,14 @@ BEGIN
         END IF;
     END WHILE;
 
-    -- বাক্সের চলতি অবস্থা হালনাগাদ
-    UPDATE hives
-       SET filled = p_frames_filled, state = p_state
-     WHERE id = v_hive_id;
+    -- বাক্সের চলতি অবস্থা হালনাগাদ — শুধু এটাই সবচেয়ে নতুন পরিদর্শন হলে।
+    -- পুরনো তারিখের পরিদর্শন পরে লিখলে বাক্সের এখনকার অবস্থা মুছে যেত।
+    IF NOT EXISTS (SELECT 1 FROM inspections
+                    WHERE hive_id = v_hive_id AND inspect_date > p_date) THEN
+        UPDATE hives
+           SET filled = p_frames_filled, state = p_state
+         WHERE id = v_hive_id;
+    END IF;
 
     INSERT INTO hive_events (hive_id, actor_id, event_date, kind, note, created_at)
     VALUES (v_hive_id, p_inspector_id, p_date, 'inspect',
@@ -297,7 +301,9 @@ BEGIN
         VALUES (v_owner, 'inspection',
                 CONCAT('পরিদর্শন বাকি — ', v_code),
                 CONCAT(v_farm, ' খামারের ', v_code, ' বাক্স ',
-                       IF(v_days >= 999, 'কখনো পরিদর্শন হয়নি',
+                       -- কখনো পরিদর্শন না হওয়া বাক্সে দিন NULL — আগে তখন পুরো
+                       -- body NULL হয়ে INSERT ভেঙে যেত
+                       IF(v_days IS NULL OR v_days >= 999, 'কখনো পরিদর্শন হয়নি',
                           CONCAT(fn_bn_digits(v_days), ' দিন ধরে দেখা হয়নি')),
                        '। একবার দেখে নিন।'),
                 -- ref_id বসানো হয় যাতে sql/09_events.sql-এর রাতের event

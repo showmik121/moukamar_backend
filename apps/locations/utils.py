@@ -8,21 +8,19 @@ from .models import District, Upazila
 
 
 def resolve_upazila(district_name, upazila_name):
-    """নাম দিয়ে Upazila ফেরত দেয়। না থাকলে তৈরি করে।
+    """নাম দিয়ে Upazila ফেরত দেয়; তালিকায় না থাকলে None।
 
-    seed-এ ৬৪ জেলা ও উপজেলা আছে, তবু কেউ তালিকার বাইরের নাম পাঠালে
-    নিবন্ধন আটকে যাওয়ার চেয়ে সারিটা তৈরি করে নেওয়াই ভালো।
+    শুধু খোঁজে, তৈরি করে না। আগে অচেনা নাম এলে নতুন জেলা/উপজেলা বানিয়ে
+    ফেলত — ভুল encoding-এ আসা "?????" বা বানান ভুলও স্থায়ী জেলা হয়ে
+    যেত। seed-এ ৬৪ জেলা ও ৫০১ উপজেলা আছে, frontend-এর তালিকাও সেটাই;
+    তালিকার বাইরের নাম হলে ডাকা জায়গাটা বাংলা বার্তা দিয়ে আটকায়।
+    উপজেলা ফাঁকা থাকলে ওই জেলার "সদর" উপজেলা।
     """
     district_name = (district_name or '').strip()
-    upazila_name = (upazila_name or '').strip()
+    upazila_name = (upazila_name or '').strip() or 'সদর'
     if not district_name:
         return None
-
-    district, _ = District.objects.get_or_create(name=district_name)
-    if not upazila_name:
-        upazila_name = 'সদর'
-    upazila, _ = Upazila.objects.get_or_create(district=district, name=upazila_name)
-    return upazila
+    return Upazila.objects.filter(district__name=district_name, name=upazila_name).first()
 
 
 def district_point(district_name):

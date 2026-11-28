@@ -41,7 +41,7 @@ BEGIN
            'inspection',
            CONCAT('পরিদর্শন বাকি — ', v.code),
            CONCAT(v.farm_name, ' খামারের ', v.code, ' বাক্স ',
-                  IF(v.days_since_inspection >= 999,
+                  IF(v.days_since_inspection IS NULL OR v.days_since_inspection >= 999,
                      'কখনো পরিদর্শন হয়নি',
                      CONCAT(fn_bn_digits(v.days_since_inspection),
                             ' দিন ধরে দেখা হয়নি')),

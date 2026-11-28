@@ -18,6 +18,11 @@ import django  # noqa: E402
 django.setup()
 
 from django.test import Client  # noqa: E402
+from django.test.utils import setup_test_environment  # noqa: E402
+
+# Django-র test runner যা করে: test Client-এর 'testserver' host-কে
+# ALLOWED_HOSTS-এ যোগ করা (settings-এ এখন শুধু localhost/127.0.0.1)
+setup_test_environment()
 
 from apps.accounts.models import User  # noqa: E402
 from apps.alerts.models import Notification, SprayAlert  # noqa: E402
@@ -65,6 +70,37 @@ check('GET /api/flora/', r.status_code == 200 and len(flora) == 7, f'count={len(
 check('ফুলের মাস junction থেকে আসছে', mustard and mustard['months'] == [1, 2, 12],
       f"সরিষার মাস={mustard['months'] if mustard else None}")
 
+# ---------- ২. লগ ইন ছাড়া ভেতরের endpoint বন্ধ থাকা উচিত ----------
+r = c.get('/api/dashboard/')
+check('লগ ইন ছাড়া /api/dashboard/ বন্ধ', r.status_code in (401, 403), f'status={r.status_code}')
+
+# খামারির ফোন নম্বর আর অবস্থান থাকে — আগে লগ ইন ছাড়াই খোলা ছিল
+for url in ('/api/farmers/', '/api/map-farmers/', '/api/auth/users/'):
+    r = c.get(url)
+    check(f'লগ ইন ছাড়া {url} বন্ধ', r.status_code in (401, 403), f'status={r.status_code}')
+
+# ---------- ২ক. frontend একই origin থেকে ----------
+r = c.get('/index.html')
+check('GET /index.html (Django frontend পাঠায়)', r.status_code == 200, f'status={r.status_code}')
+check('পাতা খোলার সাথে csrftoken cookie বসে', 'csrftoken' in r.cookies,
+      ', '.join(r.cookies.keys()) or 'cookie নেই')
+r = c.get('/js/store.js')
+check('GET /js/store.js', r.status_code == 200, f'status={r.status_code}')
+r = c.get('/manage.py')
+check('frontend ফোল্ডারের বাইরের ফাইল দেখা যায় না', r.status_code == 404, f'status={r.status_code}')
+
+# ---------- ৩. লগ ইন ----------
+r = c.post('/api/auth/login/', {'phone': '01712345678', 'password': 'demo1234'},
+           content_type='application/json')
+check('POST /api/auth/login/', r.status_code == 200, f'status={r.status_code}')
+user_data = r.json().get('user', {}) if r.status_code == 200 else {}
+check('লগ ইনের উত্তরে জেলা-উপজেলা আছে',
+      user_data.get('district') == 'সিরাজগঞ্জ' and user_data.get('upazila') == 'উল্লাপাড়া',
+      f"{user_data.get('district')}/{user_data.get('upazila')}")
+check('খামারের নাম 1:1 profile থেকে আসছে',
+      user_data.get('farm') == 'চর ঘাটিনা খামার', str(user_data.get('farm')))
+check('অভিজ্ঞতা profile থেকে', user_data.get('exp') == 8, str(user_data.get('exp')))
+
 r = c.get('/api/farmers/')
 farmers = r.json() if r.status_code == 200 else []
 check('GET /api/farmers/', r.status_code == 200 and len(farmers) >= 1, f'count={len(farmers)}')
@@ -79,21 +115,17 @@ if farmers:
 r = c.get('/api/map-farmers/')
 check('GET /api/map-farmers/', r.status_code == 200, f'status={r.status_code}')
 
-# ---------- ২. লগ ইন ছাড়া ভেতরের endpoint বন্ধ থাকা উচিত ----------
-r = c.get('/api/dashboard/')
-check('লগ ইন ছাড়া /api/dashboard/ বন্ধ', r.status_code in (401, 403), f'status={r.status_code}')
+r = c.get('/api/auth/users/')
+check('খামারি ব্যবহারকারী তালিকা দেখতে পারে না (শুধু অ্যাডমিন)', r.status_code == 403,
+      f'status={r.status_code}')
 
-# ---------- ৩. লগ ইন ----------
-r = c.post('/api/auth/login/', {'phone': '01712345678', 'password': 'demo1234'},
-           content_type='application/json')
-check('POST /api/auth/login/', r.status_code == 200, f'status={r.status_code}')
-user_data = r.json().get('user', {}) if r.status_code == 200 else {}
-check('লগ ইনের উত্তরে জেলা-উপজেলা আছে',
-      user_data.get('district') == 'সিরাজগঞ্জ' and user_data.get('upazila') == 'উল্লাপাড়া',
-      f"{user_data.get('district')}/{user_data.get('upazila')}")
-check('খামারের নাম 1:1 profile থেকে আসছে',
-      user_data.get('farm') == 'চর ঘাটিনা খামার', str(user_data.get('farm')))
-check('অভিজ্ঞতা profile থেকে', user_data.get('exp') == 8, str(user_data.get('exp')))
+admin = Client()
+r = admin.post('/api/auth/login/', {'email': 'admin@moukhamar.com', 'password': 'admin1234'},
+               content_type='application/json')
+check('অ্যাডমিন লগ ইন (seed_demo)', r.status_code == 200, f'status={r.status_code}')
+r = admin.get('/api/auth/users/')
+check('অ্যাডমিন ব্যবহারকারী তালিকা দেখে', r.status_code == 200 and len(r.json()) >= 3,
+      f"status={r.status_code} count={len(r.json()) if r.status_code == 200 else '-'}")
 
 # ---------- ৪. লগ ইন করা endpoint ----------
 r = c.get('/api/dashboard/')
@@ -213,6 +245,31 @@ check('খামারের অবস্থান districts টেবিল থ
       new_farm is not None and new_farm.lat is not None,
       f'{new_farm.lat},{new_farm.lng}' if new_farm else '-')
 
+# ---- অন্যের খামারে বাক্স বসানো আটকায় কিনা (আগে যেকোনো farm id চলত) ----
+from apps.farms.models import Hive as HiveModel  # noqa: E402
+
+if new_farm:
+    r = c.post('/api/hives/', {'code': 'VF-IDOR', 'farm': new_farm.pk,
+                               'species': 'Apis mellifera', 'frames': 10},
+               content_type='application/json')
+    check('অন্যের খামারে বাক্স বসানো আটকায় (৪০০)',
+          r.status_code == 400 and not HiveModel.objects.filter(code='VF-IDOR').exists(),
+          f'status={r.status_code}')
+
+r = c.post('/api/hives/', {'code': 'VF-NOSP', 'farm': by_code['MK-001']['farm'], 'frames': 10},
+           content_type='application/json')
+check('প্রজাতি ছাড়া বাক্স — ৫০০ নয়, বাংলা বার্তা (৪০০)', r.status_code == 400,
+      f'status={r.status_code}')
+
+r = c.post('/api/farms/', {'name': 'জেলা ছাড়া খামার'}, content_type='application/json')
+check('জেলা ছাড়া খামার — ৫০০ নয়, বাংলা বার্তা (৪০০)', r.status_code == 400,
+      f'status={r.status_code}')
+
+r = c.post('/api/hives/NO-SUCH/events/', {'date': '2026-11-20', 'kind': 'other', 'note': 'x'},
+           content_type='application/json')
+check('অস্তিত্বহীন বাক্সে ঘটনা লিখলে ৪০৪ (আগে ৫০০)', r.status_code == 404,
+      f'status={r.status_code}')
+
 # ---------- ৬. পাসওয়ার্ড বদলের endpoint (আগে ছিল না) ----------
 r = fresh.post('/api/auth/password/',
                {'old_password': 'test1234', 'new_password': 'test5678'},
@@ -241,6 +298,36 @@ after = Notification.objects.filter(kind='spray').count()
 # (আগে Python আর trigger দুটোই করলে এমন হতো), তাই সংখ্যাটা মিলিয়ে দেখা
 check('স্প্রে নোটিশ থেকে trigger ঠিক একটা সতর্কতা বানায়', after == before + 1,
       f'{before} → {after}')
+
+r = c.post('/api/spray-alerts/', {
+    'district': 'সিরাজগঞ্জ', 'upazila': 'উল্লাপাড়া', 'crop': 'সরিষা',
+    'spray_date': '2026-11-30', 'chemical': 'পরীক্ষা',
+}, content_type='application/json')
+check('খামারি স্প্রে নোটিশ পাঠাতে পারে না (৪০৩)', r.status_code == 403, f'status={r.status_code}')
+check('আটকানো নোটিশে কোনো সতর্কতা তৈরি হয়নি',
+      Notification.objects.filter(kind='spray').count() == after,
+      f"{Notification.objects.filter(kind='spray').count()}")
+
+spray_note = (Notification.objects.filter(kind='spray', ref_id=spray_alert_id).first()
+              if spray_alert_id else None)
+if spray_note:
+    r = cropper.post(f'/api/notifications/{spray_note.pk}/read/')
+    check('অন্যের সতর্কতা "পড়া" করা যায় না (৪০৪)', r.status_code == 404, f'status={r.status_code}')
+    r = c.post(f'/api/notifications/{spray_note.pk}/read/')
+    spray_note.refresh_from_db()
+    check('POST /api/notifications/<id>/read/', r.status_code == 200 and not spray_note.unread,
+          f'status={r.status_code} unread={spray_note.unread}')
+
+# ---- CSRF: লগ ইন করা session থেকে token ছাড়া লেখা যায় না ----
+strict = Client(enforce_csrf_checks=True)
+strict.post('/api/auth/login/', {'phone': '01812345678', 'password': 'demo1234'},
+            content_type='application/json')
+r = strict.post('/api/notifications/read-all/')
+check('CSRF token ছাড়া POST আটকায় (৪০৩)', r.status_code == 403, f'status={r.status_code}')
+strict.get('/index.html')
+r = strict.post('/api/notifications/read-all/',
+                HTTP_X_CSRFTOKEN=strict.cookies['csrftoken'].value)
+check('CSRF token দিলে POST চলে', r.status_code == 200, f'status={r.status_code}')
 
 # ---------- ৭ক. PROCEDURE-চালিত endpoint ----------
 # এই endpoint গুলো ORM-এ সারি বানায় না — sql/07_procedures.sql-এর
@@ -291,6 +378,29 @@ check('লুপ ভালো কোডগুলো নিয়েছে, ভ�
       and InspectionModel.objects.get(pk=new_inspection_id).diseases.count() == 2,
       f'{InspectionModel.objects.get(pk=new_inspection_id).diseases.count() if new_inspection_id else "-"}টা রোগ')
 
+# queen_seen/eggs_seen না পাঠালে (আগে KeyError → ৫০০) আর মন্তব্য (আগে হারিয়ে যেত);
+# তারিখটা শেষ পরিদর্শনের আগের — পুরনো পরিদর্শন বাক্সের চলতি অবস্থা বদলাবে না
+from datetime import timedelta as _td  # noqa: E402
+
+mk5 = HiveModel.objects.get(code='MK-005')
+mk5_state, mk5_filled = mk5.state, mk5.filled
+mk5_latest = mk5.inspections.order_by('-inspect_date').first().inspect_date
+r = c.post('/api/inspections/', {
+    'hive': mk5.pk, 'date': str(mk5_latest - _td(days=3)),
+    'frames_filled': 1, 'state': 'দুর্বল', 'notes': 'যাচাইয়ের মন্তব্য',
+}, content_type='application/json')
+backdated_id = r.json().get('id') if r.status_code == 201 else None
+check('queen_seen/eggs_seen ছাড়া পরিদর্শন চলে (আগে ৫০০)', r.status_code == 201,
+      f'status={r.status_code} {r.content[:100]}')
+check('পরিদর্শনের মন্তব্য সেভ হয় (আগে হারিয়ে যেত)',
+      backdated_id is not None
+      and InspectionModel.objects.get(pk=backdated_id).notes == 'যাচাইয়ের মন্তব্য',
+      InspectionModel.objects.get(pk=backdated_id).notes if backdated_id else '-')
+mk5.refresh_from_db()
+check('পুরনো তারিখের পরিদর্শন বাক্সের চলতি অবস্থা বদলায় না',
+      (mk5.state, mk5.filled) == (mk5_state, mk5_filled),
+      f'{mk5_state}/{mk5_filled} → {mk5.state}/{mk5.filled}')
+
 # আলাদা তারিখ, নাহলে uq_one_inspection_per_day আগেই আটকে দেবে আর
 # procedure-এর যাচাই পর্যন্ত পৌঁছাবে না
 r = c.post('/api/inspections/', {
@@ -325,6 +435,11 @@ if temp_farm_id:
     r = c.post('/api/hives/MK-001/move/', {'farm': 999999},
                content_type='application/json')
     check('নেই এমন খামারে সরাতে গেলে আটকায়', r.status_code == 400,
+          f'status={r.status_code}')
+
+    r = c.patch('/api/hives/MK-002/', {'farm': temp_farm_id}, content_type='application/json')
+    check('PATCH দিয়ে খামার বদল আটকায় (শুধু /move/ — ইতিহাস বাদ না পড়ে)',
+          r.status_code == 400 and HiveModel.objects.get(code='MK-002').farm_id != temp_farm_id,
           f'status={r.status_code}')
 
     # আবার আগের খামারে ফেরানো
@@ -377,7 +492,87 @@ r = other.post('/api/inspections/', {
 check('অন্য কারো বাক্সে পরিদর্শন লেখা আটকায় (৪০৩)', r.status_code == 403,
       f'status={r.status_code}')
 
+# ---- কখনো পরিদর্শন না হওয়া বাক্স, রানী, অবস্থান, একই দিনে দুই পরিদর্শন ----
+r = c.post('/api/hives/', {'code': 'VF-NEW', 'farm': by_code['MK-001']['farm'],
+                           'species': 'Apis cerana', 'frames': 8, 'state': 'রানীহীন'},
+           content_type='application/json')
+check('POST /api/hives/ (নতুন বাক্স)', r.status_code == 201, f'status={r.status_code}')
+r = c.post('/api/hives/remind-overdue/')
+check('কখনো পরিদর্শন না হওয়া বাক্সেও সতর্কতা চলে (আগে body NULL → ৪০০)',
+      r.status_code == 200 and r.json().get('sent', 0) >= 1,
+      f"status={r.status_code} {r.json() if r.status_code == 200 else r.content[:80]}")
+r = c.post('/api/hives/VF-NEW/queens/', {'source': 'যাচাই', 'color_mark': 'নীল'},
+           content_type='application/json')
+check('রানী বসাতে body-তে hive/তারিখ লাগে না (sp_new_queen)', r.status_code == 201,
+      f'status={r.status_code} {r.content[:80]}')
+HiveModel.objects.filter(code='VF-NEW').delete()
+
+r = c.post('/api/inspections/', {
+    'hive': by_code['MK-002']['id'], 'date': '2026-11-23',
+    'frames_filled': 5, 'state': 'সবল',
+}, content_type='application/json')
+check('একই দিনে দ্বিতীয় পরিদর্শন — বাংলা বার্তা (৪০০)',
+      r.status_code == 400 and 'আগেই' in str(r.json()), f'status={r.status_code} {str(r.json())[:60]}')
+
+if temp_farm_id:
+    t = Farm.objects.get(pk=temp_farm_id)
+    check('API দিয়ে নতুন খামারে জেলার অবস্থান বসে (ম্যাপে দেখা যায়)', t.lat is not None,
+          f'{t.lat},{t.lng}')
+first_farm_id = by_code['MK-001']['farm']
+r = c.patch(f'/api/farms/{first_farm_id}/', {'lat': 10.5, 'lng': 80.25},
+            content_type='application/json')
+check('বাংলাদেশের বাইরের অবস্থান — ৫০০ নয়, ৪০০', r.status_code == 400, f'status={r.status_code}')
+
+r = Client().post('/api/auth/register/', {
+    'phone': '01999000222', 'password': 'test1234', 'name': 'ভুল জেলা',
+    'district': 'নেই-জেলা', 'upazila': 'নেই-উপজেলা',
+}, content_type='application/json')
+from apps.locations.models import District  # noqa: E402
+
+check('অচেনা জেলায় নিবন্ধন আটকায়, নতুন জেলা তৈরি হয় না',
+      r.status_code == 400 and not District.objects.filter(name='নেই-জেলা').exists(),
+      f'status={r.status_code}')
+r = cropper.post('/api/spray-alerts/', {
+    'district': 'সিরাজগঞ্জ', 'upazila': 'নেই-উপজেলা', 'crop': 'সরিষা',
+    'spray_date': '2026-11-30', 'chemical': 'পরীক্ষা',
+}, content_type='application/json')
+check('অচেনা উপজেলায় স্প্রে নোটিশ আটকায় (৪০০)', r.status_code == 400, f'status={r.status_code}')
+
+# ---- কমিউনিটি: পোস্ট, upvote চালু/বন্ধ, মন্তব্য ----
+from apps.community.models import Post as PostModel  # noqa: E402
+
+r = c.post('/api/community/posts/', {'category': 'qa', 'title': 'যাচাই পোস্ট', 'body': 'পরীক্ষা',
+                                     'tag_names': ['যাচাই']}, content_type='application/json')
+post_id = r.json().get('id') if r.status_code == 201 else None
+check('POST /api/community/posts/', r.status_code == 201, f'status={r.status_code}')
+if post_id:
+    r = c.post(f'/api/community/posts/{post_id}/upvote/')
+    check('upvote দিলে গণনা ১ (trigger)',
+          r.status_code == 200 and r.json() == {'upvotes': 1, 'upvoted': True},
+          f'status={r.status_code} {r.content[:60]}')
+    r = c.post(f'/api/community/posts/{post_id}/upvote/')
+    check('একজন দুবার upvote দিতে পারে না (UNIQUE → ৪০৯)', r.status_code == 409,
+          f'status={r.status_code}')
+    r = c.get('/api/community/posts/')
+    mine = next((p for p in r.json() if p['id'] == post_id), {})
+    check('পোস্টে "আমি upvote দিয়েছি" আর লেখকের জেলা আসে',
+          mine.get('upvoted') is True and mine.get('author_district') == 'সিরাজগঞ্জ',
+          f"upvoted={mine.get('upvoted')} district={mine.get('author_district')}")
+    r = c.delete(f'/api/community/posts/{post_id}/upvote/')
+    check('upvote তুলে নিলে গণনা ০ (trigger)',
+          r.status_code == 200 and r.json().get('upvotes') == 0,
+          f'status={r.status_code} {r.content[:60]}')
+    r = c.post(f'/api/community/posts/{post_id}/comments/', {'text': 'ভালো'},
+               content_type='application/json')
+    check('POST মন্তব্য', r.status_code == 201, f'status={r.status_code}')
+r = c.post('/api/community/posts/999999/comments/', {'text': 'x'}, content_type='application/json')
+check('না থাকা পোস্টে মন্তব্য ৪০৪ (আগে ৫০০)', r.status_code == 404, f'status={r.status_code}')
+
 # ---- যাচাইয়ের সারি সরানো ----
+if post_id:
+    PostModel.objects.filter(pk=post_id).delete()
+if backdated_id:
+    InspectionModel.objects.filter(pk=backdated_id).delete()
 if new_harvest_id:
     HarvestModel.objects.filter(pk=new_harvest_id).delete()
 if new_inspection_id:

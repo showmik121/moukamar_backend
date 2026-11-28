@@ -24,7 +24,13 @@ load_env()
 
 SECRET_KEY = os.environ.get('SECRET_KEY', 'moukhamar-django-insecure-dev-key')
 DEBUG = os.environ.get('DEBUG', 'True').lower() in ('1', 'true', 'yes')
-ALLOWED_HOSTS = ['localhost', '127.0.0.1', '*']
+ALLOWED_HOSTS = [h.strip() for h in
+                 os.environ.get('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',') if h.strip()]
+
+# frontend ফোল্ডার — Django নিজেই HTML/CSS/JS পরিবেশন করে, যাতে অ্যাপ আর
+# API একই origin-এ থাকে। তাহলে session cookie আর CSRF token দুটোই কাজ করে
+# (file:// থেকে চালালে ব্রাউজার cookie রাখত না, আর CSRF Origin 'null' হতো)।
+FRONTEND_DIR = Path(os.environ.get('FRONTEND_DIR', BASE_DIR.parent / 'moukamar_frontend'))
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -108,8 +114,12 @@ REST_FRAMEWORK = {
     ],
 }
 
-CORS_ALLOW_ALL_ORIGINS = True  # production-এ নির্দিষ্ট origin দিন
+# অ্যাপ এখন একই origin থেকে চলে, তাই CORS শুধু জানা origin-এর জন্য খোলা।
+# আগে সব origin-কে cookie সহ অনুমতি দেওয়া ছিল।
+CORS_ALLOWED_ORIGINS = [o.strip() for o in os.environ.get(
+    'CORS_ALLOWED_ORIGINS', 'http://127.0.0.1:8000,http://localhost:8000').split(',') if o.strip()]
 CORS_ALLOW_CREDENTIALS = True
+CSRF_TRUSTED_ORIGINS = CORS_ALLOWED_ORIGINS
 
 LANGUAGE_CODE = 'bn'
 TIME_ZONE = 'Asia/Dhaka'

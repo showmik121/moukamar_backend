@@ -4,6 +4,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from .models import User
+from .permissions import IsAppAdmin
 from .serializers import (LoginSerializer, PasswordChangeSerializer, ProfileUpdateSerializer,
                           RegisterSerializer, UserSerializer)
 
@@ -71,9 +72,9 @@ class PasswordChangeView(APIView):
 
 
 class UserListView(APIView):
-    """GET /api/auth/users/ — অ্যাডমিন প্যানেলের ব্যবহারকারী তালিকা।"""
+    """GET /api/auth/users/ — অ্যাডমিন প্যানেলের ব্যবহারকারী তালিকা (শুধু অ্যাডমিন)।"""
 
-    permission_classes = [AllowAny]
+    permission_classes = [IsAppAdmin]
 
     def get(self, request):
         users = _with_profiles(User.objects.all())

@@ -120,6 +120,11 @@ class RegisterSerializer(serializers.Serializer):
 
         data['phone'] = phone or None
         data['email'] = email or None
+
+        # তালিকার বাইরের জেলা/উপজেলা নতুন করে তৈরি হয় না — আটকানো হয়
+        if (data.get('district') or '').strip() and not resolve_upazila(
+                data.get('district'), data.get('upazila')):
+            raise serializers.ValidationError({'upazila': 'জেলা বা উপজেলার নাম তালিকায় নেই'})
         return data
 
     @transaction.atomic
@@ -222,14 +227,20 @@ class ProfileUpdateSerializer(serializers.Serializer):
                 raise serializers.ValidationError({'phone': 'এই নম্বর অন্য কেউ ব্যবহার করছেন'})
             user.phone = phone
         if validated.get('email'):
-            user.email = validated['email'].strip()
+            email = validated['email'].strip()
+            if User.objects.filter(email__iexact=email).exclude(pk=user.pk).exists():
+                raise serializers.ValidationError({'email': 'এই ইমেইল অন্য কেউ ব্যবহার করছেন'})
+            user.email = email
 
         if validated.get('district') or validated.get('upazila'):
             district_name = validated.get('district') or (
                 user.upazila.district.name if user.upazila_id else '')
             upazila_name = validated.get('upazila') or (
                 user.upazila.name if user.upazila_id else '')
-            user.upazila = resolve_upazila(district_name, upazila_name)
+            upazila = resolve_upazila(district_name, upazila_name)
+            if not upazila:
+                raise serializers.ValidationError({'upazila': 'জেলা বা উপজেলার নাম তালিকায় নেই'})
+            user.upazila = upazila
         user.save()
 
         if user.role == 'farmer':

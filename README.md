@@ -39,10 +39,10 @@ python manage.py migrate
 # ৬. reference ডাটা — ৬৪ জেলা, ৫০১ উপজেলা, ৮টা রোগ, লক্ষণ, ফুল
 .\db.ps1 -File sql\10_seed.sql
 
-# ৭. ডেমো ব্যবহারকারী ও নমুনা খামার
+# ৭. ডেমো ব্যবহারকারী (খামারি, কৃষক, অ্যাপের অ্যাডমিন) ও নমুনা খামার
 python manage.py seed_demo
 
-# ৮. অ্যাডমিন ব্যবহারকারী (ঐচ্ছিক)
+# ৮. Django-র /admin/ প্যানেলের জন্য superuser (ঐচ্ছিক)
 python manage.py createsuperuser
 
 # ৯. সার্ভার
@@ -55,13 +55,20 @@ python manage.py runserver 8000
 .venv\Scripts\python.exe verify_api.py
 ```
 
-৭৮টা যাচাই চালায় — endpoint, অনুমতি, junction টেবিল থেকে ডাটা আসা,
+১১৭টা যাচাই চালায় — endpoint, অনুমতি (লগ ইন ছাড়া খামারির তথ্য বন্ধ,
+অন্যের খামার/বাক্সে লেখা আটকানো, শুধু অ্যাডমিন ব্যবহারকারী তালিকা,
+শুধু কৃষক স্প্রে নোটিশ, CSRF), junction টেবিল থেকে ডাটা আসা,
 নিবন্ধনে খামার তৈরি, পাসওয়ার্ড বদল, CHECK constraint গুলো আসলেই ভুল
 ডাটা আটকায় কিনা, ভিউয়ের হিসাব ORM-এর হিসাবের সাথে মেলে কিনা,
 procedure গুলো ভুল ডাটায় বাংলা বার্তা দিয়ে আটকায় কিনা, আর trigger
 গুলো আপনা থেকে ঠিক কাজ করে কিনা (স্প্রে নোটিশ থেকে **ঠিক একটা**
 সতর্কতা, audit_log-এ কে বদলাল)। নিজের তৈরি সব সারি নিজেই মুছে দেয়,
 তাই বারবার চালানো যায়।
+
+> **সাবধান:** শেষে পরিষ্কার করার সময় এটা পুরো `audit_log` আর সব
+> পরিদর্শন/রোগের সতর্কতা মুছে দেয়। তাই আসল ডাটা থাকা ডাটাবেজে নয়,
+> শুধু seed করা (ধাপ ৪–৭) একটা ডাটাবেজে চালান। আলাদা ডাটাবেজে চালাতে:
+> `$env:DB_NAME="moukhamar_verify"; .venv\Scripts\python.exe verify_api.py`
 
 `queries/` ফোল্ডারের কোনো demo ফাইল মাঝপথে থেমে গেলে ডাটাবেজ আগের
 অবস্থায় ফেরাতে:
@@ -76,6 +83,7 @@ python manage.py seed_demo --reset
 |---|---|---|
 | খামারি | 01712345678 | demo1234 |
 | কৃষক | 01812345678 | demo1234 |
+| অ্যাডমিন (অ্যাপের) | admin@moukhamar.com | admin1234 |
 
 frontend-এর লগ ইন পাতার "demo তথ্য বসান" বোতামের সাথে মিলিয়ে বানানো।
 
@@ -111,14 +119,26 @@ procedure আর trigger সেগুলো আটকায় কিনা স�
 
 ## Electron app-এর সাথে সংযোগ
 
+Django নিজেই frontend-এর পাতাগুলো পাঠায় (`http://127.0.0.1:8000/index.html`),
+তাই পাতা আর API একই origin-এ — session cookie আর CSRF token দুটোই কাজ
+করে। (আগে Electron পাতাগুলো `file://` থেকে খুলত; তখন ব্রাউজার লগ ইনের
+cookie রাখত না, আর CSRF-এর Origin `null` হওয়ায় লেখার অনুরোধ আটকে যেত।)
+
 ```powershell
-# Backend চালু রেখে frontend ফোল্ডারে
-$env:MK_BACKEND_URL="http://127.0.0.1:8000"; npm start
+# ১. backend চালু রাখুন (এই ফোল্ডারে)
+.\run-backend.bat
+# ২. অন্য terminal-এ, frontend ফোল্ডারে
+npm start
 ```
+
+frontend ফোল্ডার অন্য জায়গায় থাকলে `.env`-এ `FRONTEND_DIR=` দিন;
+backend অন্য ঠিকানায় চললে Electron-কে `MK_BACKEND_URL` দিয়ে জানান।
 
 ## API Endpoints
 
 সব `/api/` দিয়ে শুরু। লগ ইন ছাড়া শুধু **খোলা** চিহ্নিত endpoint চলে।
+লেখার (POST/PATCH/DELETE) অনুরোধে `X-CSRFToken` header লাগে — পাতা
+খোলার সময় Django `csrftoken` cookie বসিয়ে দেয়, `js/store.js` সেখান থেকে পড়ে।
 
 ### লগ ইন ও প্রোফাইল
 | Method | URL | কাজ |
@@ -128,7 +148,7 @@ $env:MK_BACKEND_URL="http://127.0.0.1:8000"; npm start
 | POST | `/auth/logout/` | লগ আউট |
 | GET/PATCH | `/auth/me/` | নিজের প্রোফাইল দেখা ও বদল |
 | POST | `/auth/password/` | পাসওয়ার্ড বদল |
-| GET | `/auth/users/` | সব ব্যবহারকারী (অ্যাডমিন প্যানেল) · খোলা |
+| GET | `/auth/users/` | সব ব্যবহারকারী (অ্যাডমিন প্যানেল) · শুধু অ্যাডমিন |
 
 ### খামার, বাক্স, পরিদর্শন, মধু
 | Method | URL | কাজ |
@@ -154,12 +174,13 @@ $env:MK_BACKEND_URL="http://127.0.0.1:8000"; npm start
 |--------|-----|-----|
 | GET | `/notifications/` | নিজের সতর্কতা |
 | POST | `/notifications/read-all/` | সব পড়া চিহ্ন |
-| GET/POST | `/spray-alerts/` | কৃষকের স্প্রে নোটিশ → এলাকার খামারিদের সতর্কতা |
+| POST | `/notifications/<id>/read/` | একটা সতর্কতা পড়া চিহ্ন |
+| GET/POST | `/spray-alerts/` | কৃষকের স্প্রে নোটিশ → এলাকার খামারিদের সতর্কতা (POST শুধু কৃষক) |
 | GET/POST | `/community/posts/?category=&tag=` | পোস্ট |
-| POST | `/community/posts/<id>/upvote/` | upvote (একজন একবার) |
+| POST/DELETE | `/community/posts/<id>/upvote/` | upvote দেওয়া / তুলে নেওয়া (একজন একবার) |
 | POST | `/community/posts/<id>/comments/` | মন্তব্য |
 
-### তথ্যভাণ্ডার (সব খোলা)
+### তথ্যভাণ্ডার (খামারির তালিকা ছাড়া সব খোলা)
 | Method | URL | কাজ |
 |--------|-----|-----|
 | GET | `/diseases/` | রোগ — লক্ষণ, ধাপে ধাপে চিকিৎসা ও প্রতিরোধ সহ |
@@ -168,8 +189,8 @@ $env:MK_BACKEND_URL="http://127.0.0.1:8000"; npm start
 | GET | `/flora/` | ফুল ও কোন মাসে ফোটে |
 | GET | `/months/` · `/crops/` · `/bee-species/` | lookup তালিকা |
 | GET | `/outbreaks/` | গত ৩০ দিনে এলাকার রোগ (পরিদর্শন থেকে গোনা) · ভিউ |
-| GET | `/farmers/?district=&upazila=&flora=` | খামারি তালিকা · ভিউ |
-| GET | `/map-farmers/` | ম্যাপের জন্য একই তথ্য · ভিউ |
+| GET | `/farmers/?district=&upazila=&flora=` | খামারি তালিকা · ভিউ · লগ ইন লাগে (ফোন নম্বর থাকে) |
+| GET | `/map-farmers/` | ম্যাপের জন্য একই তথ্য · ভিউ · লগ ইন লাগে |
 
 **· ভিউ** চিহ্নিত endpoint গুলো ORM ব্যবহার করে না — সরাসরি
 `sql/05_views.sql`-এর ভিউ থেকে পড়ে। CRUD-এর জন্য ORM (যাচাই,

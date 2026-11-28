@@ -2,7 +2,12 @@ from django.utils import timezone
 from rest_framework import serializers
 
 from apps.common import bn_date
-from apps.locations.utils import resolve_upazila
+from apps.locations.utils import district_point, resolve_upazila
+
+# sql/02_constraints.sql-এর chk_farm_point_in_bd-এর একই সীমা — আগে এখানে
+# না দেখায় বাংলাদেশের বাইরের বিন্দু দিলে CHECK ভেঙে ৫০০ আসত
+BD_LAT = (20.5, 26.7)
+BD_LNG = (88.0, 92.7)
 from apps.reference.models import BeeSpecies, Flora
 
 from .models import Farm, Harvest, Hive, HiveEvent, Inspection, InspectionDisease, Queen
@@ -32,21 +37,41 @@ class FarmSerializer(serializers.ModelSerializer):
         return [f.name for f in obj.flora.all()]
 
     def get_since(self, obj):
-        return bn_date(obj.established_on) or 'স্থায়ী'
+        return bn_date(obj.established_on) or '—'
 
+    # .all() prefetch করা তালিকা থেকে পড়ে; .filter() দিলে প্রতিটা খামারে
+    # আলাদা query যেত (N+1)
     def get_hive_count(self, obj):
-        return obj.hives.count()
+        return len(obj.hives.all())
 
     def get_queenless_count(self, obj):
-        return obj.hives.filter(state='রানীহীন').count()
+        return sum(1 for h in obj.hives.all() if h.state == 'রানীহীন')
 
-    def _apply_location(self, validated):
-        district_name = validated.pop('district_name', '')
-        upazila_name = validated.pop('upazila', '')
+    def validate(self, data):
+        # নতুন খামারে জেলা লাগবেই — নাহলে upazila খালি থেকে ডাটাবেজ ৫০০ দিত
+        if self.instance is None and not (data.get('district_name') or '').strip():
+            raise serializers.ValidationError({'district_name': 'খামারের জেলা দিন'})
+
+        lat = data.get('lat', getattr(self.instance, 'lat', None))
+        lng = data.get('lng', getattr(self.instance, 'lng', None))
+        if (lat is None) != (lng is None):
+            raise serializers.ValidationError({'lat': 'অক্ষাংশ ও দ্রাঘিমাংশ দুটোই দিন'})
+        if lat is not None and not (BD_LAT[0] <= float(lat) <= BD_LAT[1]
+                                    and BD_LNG[0] <= float(lng) <= BD_LNG[1]):
+            raise serializers.ValidationError({'lat': 'অবস্থানটা বাংলাদেশের ভেতরে হতে হবে'})
+        return data
+
+    def _apply_location(self, validated, farm=None):
+        district_name = (validated.pop('district_name', '') or '').strip()
+        upazila_name = (validated.pop('upazila', '') or '').strip()
         if upazila_name or district_name:
+            # শুধু উপজেলা বদলালে জেলা আগের খামারেরটাই
+            if not district_name and farm is not None and farm.upazila_id:
+                district_name = farm.upazila.district.name
             upazila = resolve_upazila(district_name, upazila_name)
-            if upazila:
-                validated['upazila'] = upazila
+            if not upazila:
+                raise serializers.ValidationError({'upazila': 'জেলা বা উপজেলার নাম তালিকায় নেই'})
+            validated['upazila'] = upazila
         return validated
 
     def _apply_flora(self, farm, names):
@@ -57,14 +82,19 @@ class FarmSerializer(serializers.ModelSerializer):
 
     def create(self, validated):
         names = validated.pop('flora_names', None)
+        district_name = validated.get('district_name', '')
         validated = self._apply_location(validated)
+        # অবস্থান না দিলে জেলার কেন্দ্র — নিবন্ধনের প্রথম খামারের মতো, যাতে
+        # নতুন খামারও ম্যাপে দেখা যায় (আগে lat/lng ফাঁকা থাকত)
+        if validated.get('lat') is None and validated.get('lng') is None:
+            validated['lat'], validated['lng'] = district_point(district_name)
         farm = Farm.objects.create(**validated)
         self._apply_flora(farm, names)
         return farm
 
     def update(self, farm, validated):
         names = validated.pop('flora_names', None)
-        validated = self._apply_location(validated)
+        validated = self._apply_location(validated, farm)
         for key, value in validated.items():
             setattr(farm, key, value)
         farm.save()
@@ -94,11 +124,17 @@ class HiveSerializer(serializers.ModelSerializer):
                   'frames', 'filled', 'state', 'installed_on',
                   'queen', 'queenAge', 'last']
 
+    @staticmethod
+    def _current_queen(obj):
+        # prefetch করা queens থেকে খোঁজা — obj.current_queen (.filter) প্রতিটা
+        # বাক্সে আলাদা query চালাত
+        return next((q for q in obj.queens.all() if q.removed_on is None), None)
+
     def get_queen(self, obj):
-        return 'আছে' if obj.current_queen else 'নেই'
+        return 'আছে' if self._current_queen(obj) else 'নেই'
 
     def get_queenAge(self, obj):
-        queen = obj.current_queen
+        queen = self._current_queen(obj)
         if not queen:
             return 0
         days = (timezone.localdate() - queen.installed_on).days
@@ -110,6 +146,16 @@ class HiveSerializer(serializers.ModelSerializer):
             return None
         return (timezone.localdate() - latest.inspect_date).days
 
+    def validate_farm(self, farm):
+        """শুধু নিজের খামারে বাক্স রাখা যায়।
+
+        আগে যেকোনো খামারের id পাঠিয়ে অন্যের খামারে বাক্স বসানো যেত।
+        """
+        request = self.context.get('request')
+        if request is not None and farm.owner_id != request.user.id:
+            raise serializers.ValidationError('এটা আপনার খামার নয়')
+        return farm
+
     def _species(self, validated):
         name = validated.pop('species', None)
         if name:
@@ -117,9 +163,16 @@ class HiveSerializer(serializers.ModelSerializer):
         return validated
 
     def create(self, validated):
+        if 'species' not in validated or not validated.get('species'):
+            raise serializers.ValidationError({'species': 'মৌমাছির প্রজাতি দিন'})
         return Hive.objects.create(**self._species(validated))
 
     def update(self, hive, validated):
+        # খামার বদল শুধু /move/ দিয়ে — যাতে procedure-এর যাচাই আর ইতিহাস বাদ না পড়ে
+        if 'farm' in validated and validated['farm'].pk != hive.farm_id:
+            raise serializers.ValidationError(
+                {'farm': 'বাক্স সরাতে "অন্য খামারে সরান" ব্যবহার করুন'})
+        validated.pop('farm', None)
         for key, value in self._species(validated).items():
             setattr(hive, key, value)
         hive.save()
@@ -130,7 +183,9 @@ class QueenSerializer(serializers.ModelSerializer):
     class Meta:
         model = Queen
         fields = ['id', 'hive', 'source', 'color_mark', 'installed_on', 'removed_on', 'note']
-        read_only_fields = ['removed_on']
+        # বাক্স আসে URL-এর কোড থেকে, তারিখ বসায় sp_new_queen (আজকের দিন) —
+        # আগে এ দুটো body-তে না দিলে ৪০০ আসত, অথচ procedure এগুলো ব্যবহারই করত না
+        read_only_fields = ['hive', 'installed_on', 'removed_on']
 
 
 class HiveEventSerializer(serializers.ModelSerializer):
@@ -140,7 +195,9 @@ class HiveEventSerializer(serializers.ModelSerializer):
     class Meta:
         model = HiveEvent
         fields = ['id', 'hive', 'date', 'kind', 'note', 'actor', 'actor_name']
-        read_only_fields = ['actor']
+        # বাক্সটা URL-এর কোড থেকে আসে (view-এর owned_hive) — body-তে hive
+        # চাইলে অন্যের বাক্সের id পাঠানোর রাস্তা খোলা থাকত
+        read_only_fields = ['actor', 'hive']
 
 
 class InspectionSerializer(serializers.ModelSerializer):
@@ -157,6 +214,15 @@ class InspectionSerializer(serializers.ModelSerializer):
                   'queen_seen', 'eggs_seen', 'notes', 'inspector', 'inspector_name',
                   'diseases', 'disease_codes']
         read_only_fields = ['inspector']
+        # model-এর (hive, inspect_date) UNIQUE থেকে DRF নিজে একটা ইংরেজি
+        # বার্তার validator বানায় — সেটা বাদ দিয়ে নিচে বাংলায় যাচাই
+        validators = []
+
+    def validate(self, data):
+        if Inspection.objects.filter(hive=data['hive'], inspect_date=data['inspect_date']).exists():
+            raise serializers.ValidationError(
+                {'date': 'এই বাক্সে এই তারিখে আগেই একটা পরিদর্শন লেখা আছে'})
+        return data
 
     def get_diseases(self, obj):
         return [{'code': d.disease.code, 'name': d.disease.name, 'severity': d.severity}

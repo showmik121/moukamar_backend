@@ -117,9 +117,10 @@ class FarmerList(APIView):
     পুরো জোড়া লাগানোর কাজটা `v_farmer_directory` ভিউ করে — বাক্স গোনা,
     মোট মধু, ফুলের তালিকা, অবস্থান (খামারের না থাকলে জেলার)। আগে এটা
     Python-এ কয়েকটা query করে করা হতো।
-    """
 
-    permission_classes = [AllowAny]
+    লগ ইন লাগে — তালিকায় খামারিদের ফোন নম্বর আর খামারের অবস্থান থাকে,
+    আগে এটা লগ ইন ছাড়াই যে কেউ দেখতে পেত।
+    """
 
     def get(self, request):
         sql = 'SELECT * FROM v_farmer_directory WHERE 1 = 1'
@@ -162,6 +163,7 @@ class FarmerList(APIView):
             'lat': num(r['lat'], None),
             'lng': num(r['lng'], None),
             'type': r['farm_type'],
+            'farms': num(r['farm_count']),
             'hives': num(r['hive_count']),
             'activeBoxes': num(r['active_hives']),
             'honeyProduced': num(r['total_honey_kg']),

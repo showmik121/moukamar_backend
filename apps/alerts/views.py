@@ -1,4 +1,5 @@
 from rest_framework import generics
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -42,5 +43,21 @@ class SprayAlertListCreate(generics.ListCreateAPIView):
         notifications বানিয়ে দেয়। আগে এই লুপটা এখানে Python-এ ছিল;
         ডাটাবেজে নেওয়ায় সরাসরি SQL দিয়ে নোটিশ ঢোকালেও খামারিরা জানতে
         পারেন, আর নিয়মটা দুই জায়গায় লেখা থাকে না।
+
+        শুধু কৃষক (বা অ্যাডমিন) নোটিশ দিতে পারেন — আগে যেকোনো ব্যবহারকারী
+        যেকোনো উপজেলার সব খামারিকে সতর্কতা পাঠাতে পারত।
         """
-        serializer.save(cropper=self.request.user)
+        user = self.request.user
+        if user.role not in ('cropper', 'admin') and not user.is_staff:
+            raise PermissionDenied('স্প্রের নোটিশ শুধু কৃষক দিতে পারেন')
+        serializer.save(cropper=user)
+
+
+class NotificationRead(APIView):
+    """POST /api/notifications/<id>/read/ — একটা সতর্কতা পড়া হয়েছে।"""
+
+    def post(self, request, pk):
+        updated = Notification.objects.filter(pk=pk, recipient=request.user).update(unread=False)
+        if not updated:
+            return Response({'detail': 'সতর্কতা পাওয়া যায়নি'}, status=404)
+        return Response({'detail': 'পড়া হয়েছে'})

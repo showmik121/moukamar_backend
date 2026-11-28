@@ -81,7 +81,8 @@ class HiveEventList(generics.ListCreateAPIView):
                 .select_related('actor'))
 
     def perform_create(self, serializer):
-        hive = Hive.objects.get(code=self.kwargs['code'], farm__owner=self.request.user)
+        # অন্যের বা অস্তিত্বহীন বাক্স হলে ৫০০ নয়, ৪০৪
+        hive = owned_hive(self.request, self.kwargs['code'])
         serializer.save(hive=hive, actor=self.request.user)
 
 
@@ -136,11 +137,19 @@ class InspectionListCreate(generics.ListCreateAPIView):
 
         codes = ','.join(data.get('disease_codes') or [])
 
+        # queen_seen/eggs_seen না পাঠালে model-এর default (True) — আগে KeyError-এ ৫০০ হতো
         out = call_proc(
             'CALL sp_record_inspection(%s, %s, %s, %s, %s, %s, %s, %s, @insp, @added)',
             [hive.code, data['inspect_date'], data['frames_filled'], data['state'],
-             data['queen_seen'], data['eggs_seen'], codes, self.request.user.id],
+             data.get('queen_seen', True), data.get('eggs_seen', True), codes,
+             self.request.user.id],
             ['insp', 'added'])
+
+        # procedure মন্তব্যের ঘর খালি রেখে লেখে; ব্যবহারকারীর মন্তব্য এখানে বসে
+        # (আগে মন্তব্যটা চুপচাপ হারিয়ে যেত)
+        notes = (data.get('notes') or '').strip()
+        if notes:
+            Inspection.objects.filter(pk=out['insp']).update(notes=notes)
 
         serializer.instance = Inspection.objects.get(pk=out['insp'])
 
@@ -173,6 +182,10 @@ class HarvestListCreate(generics.ListCreateAPIView):
             [hive.code, data['harvest_date'], data['kg'], data.get('moisture'),
              flora.name if flora else None, self.request.user.id],
             ['hid'])
+
+        notes = (data.get('notes') or '').strip()
+        if notes:
+            Harvest.objects.filter(pk=out['hid']).update(notes=notes)
 
         serializer.instance = Harvest.objects.get(pk=out['hid'])
 
@@ -271,6 +284,7 @@ class HiveStatusView(APIView):
         sql += ' ORDER BY code'
 
         return Response([{
+            'id': r['hive_id'],
             'code': r['code'],
             'farm': r['farm_id'],
             'farm_name': r['farm_name'],

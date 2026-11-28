@@ -29,6 +29,9 @@ DEMO_FARMER = {'phone': '01712345678', 'name': 'রহিম উদ্দিন'
 DEMO_CROPPER = {'phone': '01812345678', 'name': 'মো. আলমগীর', 'district': 'সিরাজগঞ্জ',
                 'upazila': 'উল্লাপাড়া', 'crop': 'সরিষা'}
 DEMO_PASSWORD = 'demo1234'
+# অ্যাপের অ্যাডমিন (role='admin') — Django-র /admin/ প্যানেলে ঢোকার অধিকার নেই
+# (is_staff নয়), সেটার জন্য আলাদা করে createsuperuser চালাতে হয়
+DEMO_ADMIN = {'email': 'admin@moukhamar.com', 'name': 'সিস্টেম অ্যাডমিন', 'password': 'admin1234'}
 
 # frontend-এর data.js-এর HIVES থেকে — (কোড, প্রজাতি, ফ্রেম, ভরা, অবস্থা, শেষ পরিদর্শন কত দিন আগে)
 SAMPLE_HIVES = [
@@ -87,6 +90,15 @@ class Command(BaseCommand):
             CropperProfile.objects.create(
                 user=cropper, main_crop=Crop.objects.get_or_create(name=DEMO_CROPPER['crop'])[0])
             self.stdout.write(self.style.SUCCESS(f'কৃষক তৈরি: {cropper.name}'))
+
+        # ---- অ্যাডমিন ----
+        if User.objects.filter(email=DEMO_ADMIN['email']).exists():
+            self.stdout.write('অ্যাডমিন আগেই আছে')
+        else:
+            User.objects.create_user(phone=None, email=DEMO_ADMIN['email'],
+                                     password=DEMO_ADMIN['password'],
+                                     name=DEMO_ADMIN['name'], role='admin')
+            self.stdout.write(self.style.SUCCESS(f'অ্যাডমিন তৈরি: {DEMO_ADMIN["email"]}'))
 
         # ---- খামার ----
         farm = Farm.objects.filter(owner=farmer, name=DEMO_FARMER['farm']).first()
